@@ -1,8 +1,32 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 
 st.title("Stock Dashboard")
+
+# ---- Welcome / name personalization ----
+if "user_name" not in st.session_state:
+    st.session_state.user_name = ""
+
+name_input = st.text_input("What's your name?", st.session_state.user_name)
+if name_input:
+    st.session_state.user_name = name_input
+    st.write(f"Welcome, {name_input}! 👋")
+
+@st.cache_data(ttl=3600)  # cache results for 1 hour
+def get_stock_info(symbol):
+    try:
+        return yf.Ticker(symbol).info
+    except Exception:
+        return {}
+
+@st.cache_data(ttl=3600)
+def get_stock_history(symbol, period="6mo"):
+    try:
+        return yf.Ticker(symbol).history(period=period)
+    except Exception:
+        return pd.DataFrame()
 
 tab1, tab2, tab3 = st.tabs(["Market Overview", "Single Stock", "Screener"])
 
@@ -18,7 +42,7 @@ with tab1:
 
     cols = st.columns(len(indices))
     for col, (name, symbol) in zip(cols, indices.items()):
-        data = yf.Ticker(symbol).history(period="2d")
+        data = get_stock_history(symbol, "2d")
         if len(data) >= 2:
             prev_close = data["Close"].iloc[-2]
             latest = data["Close"].iloc[-1]
@@ -28,12 +52,15 @@ with tab1:
     st.subheader("Your watchlist: today's movers")
 
     watchlist = [
-        "AAPL", "MSFT", "TSLA", "NVDA", "JPM", "AMZN", "GOOGL", "META", "KO", "PFE"
+        "AAPL", "MSFT", "TSLA", "NVDA", "JPM", "AMZN", "GOOGL", "META", "KO", "PFE",
+        "WMT", "DIS", "NFLX", "XOM", "BA", "V", "MA", "HD", "PG", "INTC",
+        "ADBE", "CRM", "COST", "PEP", "UNH", "CVX", "ABBV", "MRK", "AVGO", "ORCL",
+        "T", "VZ", "NKE", "MCD", "SBUX", "LMT", "CAT", "GE", "IBM", "GS"
     ]
 
     rows = []
     for sym in watchlist:
-        data = yf.Ticker(sym).history(period="2d")
+        data = get_stock_history(sym, "2d")
         if len(data) >= 2:
             prev_close = data["Close"].iloc[-2]
             latest = data["Close"].iloc[-1]
@@ -48,31 +75,46 @@ with tab2:
     symbol = st.text_input("Enter a stock ticker (e.g. AAPL, TSLA, MSFT)", "AAPL")
 
     if symbol:
-        ticker = yf.Ticker(symbol)
-        info = ticker.info
+        info = get_stock_info(symbol)
 
-        st.subheader(info.get("longName", symbol))
+        if not info or info.get("currentPrice") is None:
+            st.error(f"Couldn't find data for '{symbol}'. Double check the ticker symbol and try again.")
+        else:
+            st.subheader(info.get("longName", symbol))
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Price", f"${info.get('currentPrice', 0):.2f}")
-        col2.metric("P/E Ratio", info.get("trailingPE", "N/A"))
-        col3.metric("Market Cap", f"{info.get('marketCap', 0):,}")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Price", f"${info.get('currentPrice', 0):.2f}")
+            col2.metric("P/E Ratio", info.get("trailingPE", "N/A"))
+            col3.metric("Market Cap", f"{info.get('marketCap', 0):,}")
 
-        history = ticker.history(period="6mo")
+            history = get_stock_history(symbol, "6mo")
 
-        # Calculate the 50-day moving average
-        history["50-Day Avg"] = history["Close"].rolling(window=50).mean()
+            history["50-Day Avg"] = history["Close"].rolling(window=50).mean()
+            history["Daily Return"] = history["Close"].pct_change()
+            daily_volatility = history["Daily Return"].std()
+            annualized_volatility = daily_volatility * np.sqrt(252) * 100
 
-        current_price = history["Close"].iloc[-1]
-        current_avg = history["50-Day Avg"].iloc[-1]
+            current_price = history["Close"].iloc[-1]
+            current_avg = history["50-Day Avg"].iloc[-1]
 
-        if pd.notna(current_avg):
-            if current_price > current_avg:
-                           st.success(f"📈 Trending Up — current price (\\${current_price:.2f}) is above its 50-day average (\\${current_avg:.2f})")
-            else:
-                st.error(f"📉 Trending Down — current price (\\${current_price:.2f}) is below its 50-day average (\\${current_avg:.2f})")   
+            trend_col, vol_col = st.columns(2)
 
-        st.line_chart(history[["Close", "50-Day Avg"]])
+            with trend_col:
+                if pd.notna(current_avg):
+                    if current_price > current_avg:
+                        st.success(f"📈 Trending Up — price (\\${current_price:.2f}) is above its 50-day average (\\${current_avg:.2f})")
+                    else:
+                        st.error(f"📉 Trending Down — price (\\${current_price:.2f}) is below its 50-day average (\\${current_avg:.2f})")
+
+            with vol_col:
+                if annualized_volatility < 25:
+                    st.info(f"🟢 Lower volatility — {annualized_volatility:.1f}% annualized")
+                elif annualized_volatility < 50:
+                    st.warning(f"🟡 Moderate volatility — {annualized_volatility:.1f}% annualized")
+                else:
+                    st.error(f"🔴 High volatility — {annualized_volatility:.1f}% annualized")
+
+            st.line_chart(history[["Close", "50-Day Avg"]])
 
 # ---- TAB 3: Screener ----
 with tab3:
@@ -80,7 +122,9 @@ with tab3:
 
     watchlist = [
         "AAPL", "MSFT", "TSLA", "NVDA", "JPM", "AMZN", "GOOGL", "META", "KO", "PFE",
-        "WMT", "DIS", "NFLX", "XOM", "BA", "V", "MA", "HD", "PG", "INTC"
+        "WMT", "DIS", "NFLX", "XOM", "BA", "V", "MA", "HD", "PG", "INTC",
+        "ADBE", "CRM", "COST", "PEP", "UNH", "CVX", "ABBV", "MRK", "AVGO", "ORCL",
+        "T", "VZ", "NKE", "MCD", "SBUX", "LMT", "CAT", "GE", "IBM", "GS"
     ]
 
     col1, col2 = st.columns(2)
@@ -89,7 +133,7 @@ with tab3:
 
     rows = []
     for sym in watchlist:
-        data = yf.Ticker(sym).info
+        data = get_stock_info(sym)
         pe = data.get("trailingPE")
         cap = data.get("marketCap")
         if pe is not None and cap is not None:
