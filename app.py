@@ -2,8 +2,13 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+from curl_cffi import requests as cffi_requests
 
 st.title("Stock Dashboard")
+
+# A session that impersonates a real browser, so Yahoo Finance doesn't
+# block requests coming from cloud servers (a common issue when deploying).
+session = cffi_requests.Session(impersonate="chrome")
 
 # ---- Welcome / name personalization ----
 if "user_name" not in st.session_state:
@@ -17,14 +22,14 @@ if name_input:
 @st.cache_data(ttl=3600)  # cache results for 1 hour
 def get_stock_info(symbol):
     try:
-        return yf.Ticker(symbol).info
+        return yf.Ticker(symbol, session=session).info
     except Exception:
         return {}
 
 @st.cache_data(ttl=3600)
 def get_stock_history(symbol, period="6mo"):
     try:
-        return yf.Ticker(symbol).history(period=period)
+        return yf.Ticker(symbol, session=session).history(period=period)
     except Exception:
         return pd.DataFrame()
 
