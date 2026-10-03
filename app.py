@@ -59,7 +59,20 @@ with tab2:
         col3.metric("Market Cap", f"{info.get('marketCap', 0):,}")
 
         history = ticker.history(period="6mo")
-        st.line_chart(history["Close"])
+
+        # Calculate the 50-day moving average
+        history["50-Day Avg"] = history["Close"].rolling(window=50).mean()
+
+        current_price = history["Close"].iloc[-1]
+        current_avg = history["50-Day Avg"].iloc[-1]
+
+        if pd.notna(current_avg):
+            if current_price > current_avg:
+                           st.success(f"📈 Trending Up — current price (\\${current_price:.2f}) is above its 50-day average (\\${current_avg:.2f})")
+            else:
+                st.error(f"📉 Trending Down — current price (\\${current_price:.2f}) is below its 50-day average (\\${current_avg:.2f})")   
+
+        st.line_chart(history[["Close", "50-Day Avg"]])
 
 # ---- TAB 3: Screener ----
 with tab3:
