@@ -4,10 +4,47 @@ import pandas as pd
 
 st.title("Stock Dashboard")
 
-tab1, tab2 = st.tabs(["Single Stock", "Screener"])
+tab1, tab2, tab3 = st.tabs(["Market Overview", "Single Stock", "Screener"])
 
-# ---- TAB 1: Single stock lookup ----
+# ---- TAB 1: Market Overview ----
 with tab1:
+    st.write("Most recent trading day's performance. (Markets are closed on weekends and holidays, so this reflects the last session.)")
+
+    indices = {
+        "S&P 500": "^GSPC",
+        "Nasdaq": "^IXIC",
+        "Dow Jones": "^DJI"
+    }
+
+    cols = st.columns(len(indices))
+    for col, (name, symbol) in zip(cols, indices.items()):
+        data = yf.Ticker(symbol).history(period="2d")
+        if len(data) >= 2:
+            prev_close = data["Close"].iloc[-2]
+            latest = data["Close"].iloc[-1]
+            pct_change = ((latest - prev_close) / prev_close) * 100
+            col.metric(name, f"{latest:,.2f}", f"{pct_change:+.2f}%")
+
+    st.subheader("Your watchlist: today's movers")
+
+    watchlist = [
+        "AAPL", "MSFT", "TSLA", "NVDA", "JPM", "AMZN", "GOOGL", "META", "KO", "PFE"
+    ]
+
+    rows = []
+    for sym in watchlist:
+        data = yf.Ticker(sym).history(period="2d")
+        if len(data) >= 2:
+            prev_close = data["Close"].iloc[-2]
+            latest = data["Close"].iloc[-1]
+            pct_change = ((latest - prev_close) / prev_close) * 100
+            rows.append({"Ticker": sym, "Price": round(latest, 2), "% Change Today": round(pct_change, 2)})
+
+    df = pd.DataFrame(rows).sort_values("% Change Today", ascending=False)
+    st.dataframe(df, width="stretch")
+
+# ---- TAB 2: Single stock lookup ----
+with tab2:
     symbol = st.text_input("Enter a stock ticker (e.g. AAPL, TSLA, MSFT)", "AAPL")
 
     if symbol:
@@ -24,8 +61,8 @@ with tab1:
         history = ticker.history(period="6mo")
         st.line_chart(history["Close"])
 
-# ---- TAB 2: Screener across multiple stocks ----
-with tab2:
+# ---- TAB 3: Screener ----
+with tab3:
     st.write("Filter stocks by P/E ratio and market cap.")
 
     watchlist = [
@@ -54,6 +91,6 @@ with tab2:
 
     if rows:
         df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width="stretch")
     else:
         st.write("No stocks match that filter.")
