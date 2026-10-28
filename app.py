@@ -208,5 +208,177 @@ with tab1:
             col.metric(name, "N/A")
 
     st.subheader("Your watchlist: today's movers")
+
     rows = []
     for sym in WATCHLIST:
+        data = get_stock_history(sym, "2d", retries=1)
+        if len(data) >= 2:
+            prev_close = data["Close"].iloc[-2]
+            latest = data["Close"].iloc[-1]
+            pct_change = ((latest - prev_close) / prev_close) * 100
+            rows.append(
+                {
+                    "Ticker": sym,
+                    "Price": round(latest, 2),
+                    "% Change Today": round(pct_change, 2),
+                }
+            )
+
+    if rows:
+        df = pd.DataFrame(rows).sort_values("% Change Today", ascending=False)
+        st.dataframe(df, width="stretch")
+    else:
+        st.warning("Market data is temporarily unavailable.")
+        retry_button("retry_market")
+
+# ---- TAB 2: Single stock lookup ----
+with tab2:
+    symbol = st.text_input(
+        "Enter a stock ticker (e.g. AAPL, TSLA, MSFT)", "AAPL"
+    ).strip().upper()
+
+    if symbol:
+        history = get_stock_history(symbol, "6mo", retries=2)
+        fund = get_fundamentals(symbol, retries=2)
+        profile = get_profile(symbol, retries=2)
+
+        price = profile.get("currentPrice")
+        if price is None and not history.empty:
+            price = float(history["Close"].iloc[-1])
+
+        pe_ratio = fund.get("trailingPE")
+        market_cap = fund.get("marketCap")
+        if market_cap is None:
+            market_cap = get_fast_info(symbol, retries=1).get("market_cap")
+
+        if price is None and history.empty:
+            st.error(
+                f"Couldn't load data for '{symbol}'. Check the ticker symbol. If it "
+                "is correct, the data source may be temporarily unavailable, so try "
+                "again in a moment."
+            )
+            retry_button("retry_single")
+        else:
+            st.subheader(profile.get("longName") or COMPANY_NAMES.get(symbol, symbol))
+
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Price", f"${price:,.2f}" if price else "N/A")
+            col2.metric("P/E Ratio", f"{pe_ratio:.2f}" if pe_ratio else "N/A")
+            col3.metric(
+                "Market Cap",
+                f"${market_cap / 1_000_000_000:,.1f}B" if market_cap else "N/A",
+            )
+
+            if not fund:
+                st.caption(
+                    "Some details (like the P/E ratio) are unavailable right now "
+                    "because the data source is limiting requests."
+                )
+                retry_button("retry_details")
+
+            if not history.empty:
+                history = history.copy()
+                history["50-Day Avg"] = history["Close"].rolling(window=50).mean()
+                history["Daily Return"] = history["Close"].pct_change()
+                daily_volatility = history["Daily Return"].std()
+                annualized_volatility = daily_volatility * np.sqrt(252) * 100
+
+                current_price = history["Close"].iloc[-1]
+                current_avg = history["50-Day Avg"].iloc[-1]
+
+                trend_col, vol_col = st.columns(2)
+
+                with trend_col:
+                    if pd.notna(current_avg):
+                        if current_price > current_avg:
+                            st.success(
+                                f"📈 Trending Up: price (\\${current_price:.2f}) is above "
+                                f"its 50-day average (\\${current_avg:.2f})"
+                            )
+                        else:
+                            st.error(
+                                f"📉 Trending Down: price (\\${current_price:.2f}) is below "
+                                f"its 50-day average (\\${current_avg:.2f})"
+                            )
+
+                with vol_col:
+                    if pd.notna(annualized_volatility):
+                        if annualized_volatility < 25:
+                            st.info(
+                                f"🟢 Lower volatility: {annualized_volatility:.1f}% annualized"
+                            )
+                        elif annualized_volatility < 50:
+                            st.warning(
+                                f"🟡 Moderate volatility: {annualized_volatility:.1f}% annualized"
+                            )
+                        else:
+                            st.error(
+                                f"🔴 High volatility: {annualized_volatility:.1f}% annualized"
+                            )
+
+                st.line_chart(history[["Close", "50-Day Avg"]])
+
+# ---- TAB 3: Screener ----
+with tab3:
+    st.write("Filter stocks by P/E ratio and market cap.")
+
+    col1, col2 = st.columns(2)
+    max_pe = col1.slider("Maximum P/E ratio", min_value=0, max_value=100, value=40)
+    min_cap_b = col2.slider(
+        "Minimum market cap ($ billions)", min_value=0, max_value=3000, value=0
+    )
+
+    rows = []
+    checked = 0
+    failed_in_a_row = 0
+    gave_up = False
+
+    for sym in WATCHLIST:
+        data = get_fundamentals(sym, retries=1)
+        if not data:
+            failed_in_a_row += 1
+            # If the data source is blocking us, stop early instead of making
+            # the visitor wait through dozens of failed requests.
+            if failed_in_a_row >= 5 and checked == 0:
+                gave_up = True
+                break
+            continue
+
+        failed_in_a_row = 0
+        checked += 1
+        pe = data.get("trailingPE")
+        cap = data.get("marketCap")
+        if pe is not None and cap is not None:
+            if pe <= max_pe and cap >= min_cap_b * 1_000_000_000:
+                hist = get_stock_history(sym, "2d", retries=1)
+                price = round(float(hist["Close"].iloc[-1]), 2) if not hist.empty else None
+                rows.append(
+                    {
+                        "Ticker": sym,
+                        "Name": COMPANY_NAMES.get(sym, sym),
+                        "Price": price,
+                        "P/E Ratio": round(pe, 2),
+                        "Market Cap ($B)": round(cap / 1_000_000_000, 1),
+                    }
+                )
+
+    if gave_up:
+        st.warning(
+            "Stock details are temporarily unavailable because the data source is "
+            "limiting requests. Please try again in a moment."
+        )
+        retry_button("retry_screener")
+    elif rows:
+        st.dataframe(pd.DataFrame(rows), width="stretch")
+        if checked < len(WATCHLIST):
+            st.caption(
+                f"Checked {checked} of {len(WATCHLIST)} stocks. Some couldn't be "
+                "loaded right now."
+            )
+    else:
+        st.write("No stocks match that filter.")
+        if checked < len(WATCHLIST):
+            st.caption(
+                f"Only {checked} of {len(WATCHLIST)} stocks could be loaded right now."
+            )
+            retry_button("retry_screener_partial")
