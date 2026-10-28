@@ -207,4 +207,6 @@ with tab1:
         else:
             col.metric(name, "N/A")
 
-    st.subheader("Your
+    st.subheader("Your watchlist: today's movers")
+    rows = []
+    for sym in WATCHLIST:
